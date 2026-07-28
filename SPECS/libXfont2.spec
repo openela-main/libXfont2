@@ -1,7 +1,7 @@
 Summary: X.Org X11 libXfont2 runtime library
 Name: libXfont2
 Version: 2.0.3
-Release: 2%{?dist}
+Release: 2%{?dist}.1
 License: MIT
 Group: System Environment/Libraries
 URL: http://www.x.org
@@ -14,6 +14,10 @@ BuildRequires: xorg-x11-util-macros
 BuildRequires: xorg-x11-xtrans-devel >= 1.0.3-3
 BuildRequires: libfontenc-devel
 BuildRequires: freetype-devel
+
+Patch1:        0001-bitscale-fix-integer-overflow-in-BitmapScaleBitmaps-.patch
+Patch2:        0002-pcfread-validate-bitmap-sizes-and-offsets-against-pe.patch
+Patch3:        0003-bitscale-add-bounds-check-to-computeProps-for-proper.patch
 
 %description
 X.Org X11 libXfont2 runtime library
@@ -28,7 +32,7 @@ Requires: libfontenc-devel%{?_isa}
 X.Org X11 libXfont development package
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 autoreconf -v --install --force
@@ -56,6 +60,12 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
 %{_libdir}/pkgconfig/xfont2.pc
 
 %changelog
+* Wed Jul 08 2026 Olivier Fourdan <ofourdan@redhat.com> - 2.0.3-2.1
+- CVE fix for: CVE-2026-56001, CVE-2026-56002, CVE-2026-56003
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191877
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191928
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191948
+
 * Fri Jun 29 2018 Adam Jackson <ajax@redhat.com> - 2.0.3-2
 - Use ldconfig scriptlet macros
 
