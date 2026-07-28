@@ -1,7 +1,7 @@
 Summary: X.Org X11 libXfont2 runtime library
 Name: libXfont2
 Version: 2.0.6
-Release: 5%{?dist}
+Release: 5%{?dist}.1
 License: BSD-2-Clause AND BSD-4-Clause-UC AND HPND-sell-variant AND MIT-open-group AND SMLNJ AND X11
 URL: http://www.x.org
 
@@ -15,6 +15,10 @@ BuildRequires: xorg-x11-xtrans-devel >= 1.0.3-3
 BuildRequires: libfontenc-devel
 BuildRequires: freetype-devel
 
+Patch:         0001-bitscale-fix-integer-overflow-in-BitmapScaleBitmaps-.patch
+Patch:         0002-pcfread-validate-bitmap-sizes-and-offsets-against-pe.patch
+Patch:         0003-bitscale-add-bounds-check-to-computeProps-for-proper.patch
+
 %description
 X.Org X11 libXfont2 runtime library
 
@@ -27,7 +31,7 @@ Requires: libfontenc-devel%{?_isa}
 X.Org X11 libXfont development package
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 autoreconf -v --install --force
@@ -55,6 +59,12 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
 %{_libdir}/pkgconfig/xfont2.pc
 
 %changelog
+* Wed Jul 08 2026 Olivier Fourdan <ofourdan@redhat.com> - 2.0.6-5.1
+- CVE fix for: CVE-2026-56001, CVE-2026-56002, CVE-2026-56003
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191882
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191930
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191949
+
 * Tue Oct 29 2024 Troy Dawson <tdawson@redhat.com> - 2.0.6-5
 - Bump release for October 2024 mass rebuild:
   Resolves: RHEL-64018
