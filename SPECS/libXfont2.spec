@@ -1,7 +1,7 @@
 Summary: X.Org X11 libXfont2 runtime library
 Name: libXfont2
 Version: 2.0.3
-Release: 12%{?dist}
+Release: 12%{?dist}.1
 License: MIT
 URL: http://www.x.org
 
@@ -15,6 +15,10 @@ BuildRequires: xorg-x11-xtrans-devel >= 1.0.3-3
 BuildRequires: libfontenc-devel
 BuildRequires: freetype-devel
 
+Patch:         0001-bitscale-fix-integer-overflow-in-BitmapScaleBitmaps-.patch
+Patch:         0002-pcfread-validate-bitmap-sizes-and-offsets-against-pe.patch
+Patch:         0003-bitscale-add-bounds-check-to-computeProps-for-proper.patch
+
 %description
 X.Org X11 libXfont2 runtime library
 
@@ -27,7 +31,7 @@ Requires: libfontenc-devel%{?_isa}
 X.Org X11 libXfont development package
 
 %prep
-%autosetup
+%autosetup -p1
 
 %build
 autoreconf -v --install --force
@@ -55,6 +59,12 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
 %{_libdir}/pkgconfig/xfont2.pc
 
 %changelog
+* Wed Jul 08 2026 Olivier Fourdan <ofourdan@redhat.com> - 2.0.3-12.1
+- CVE fix for: CVE-2026-56001, CVE-2026-56002, CVE-2026-56003
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191886
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191933
+  Resolves: https://redhat.atlassian.net/browse/RHEL-191938
+
 * Mon Aug 09 2021 Mohan Boddu <mboddu@redhat.com> - 2.0.3-12
 - Rebuilt for IMA sigs, glibc 2.34, aarch64 flags
   Related: rhbz#1991688
