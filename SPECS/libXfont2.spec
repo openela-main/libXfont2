@@ -1,7 +1,7 @@
 Summary: X.Org X11 libXfont2 runtime library
 Name: libXfont2
 Version: 2.0.6
-Release: 5%{?dist}.1
+Release: 5%{?dist}.3
 License: BSD-2-Clause AND BSD-4-Clause-UC AND HPND-sell-variant AND MIT-open-group AND SMLNJ AND X11
 URL: http://www.x.org
 
@@ -18,6 +18,11 @@ BuildRequires: freetype-devel
 Patch:         0001-bitscale-fix-integer-overflow-in-BitmapScaleBitmaps-.patch
 Patch:         0002-pcfread-validate-bitmap-sizes-and-offsets-against-pe.patch
 Patch:         0003-bitscale-add-bounds-check-to-computeProps-for-proper.patch
+# https://gitlab.freedesktop.org/xorg/lib/libxfont/-/commit/c2d222bb22c623d8a40f3275077fc7e6617f2c8a
+Patch:         0004-fserve-bounds-check-cumulative-glyph-data-writes-in-.patch
+# https://redhat.atlassian.net/browse/RHEL-221949
+# https://gitlab.freedesktop.org/xorg/lib/libxfont/-/commit/668fea81f40bcb48ec67fb55d0b851049d265290
+Patch:         libXfont2-2.0.6-CVE-2026-59679.patch
 
 %description
 X.Org X11 libXfont2 runtime library
@@ -59,6 +64,14 @@ rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
 %{_libdir}/pkgconfig/xfont2.pc
 
 %changelog
+* Thu Aug 06 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.0.6-5.3
+- CVE fix for: CVE-2026-59679
+  Resolves: https://redhat.atlassian.net/browse/RHEL-221949
+
+* Thu Aug 06 2026 RHEL Packaging Agent <redhat-ymir-agent@redhat.com> - 2.0.6-5.2
+- CVE fix for: CVE-2026-44950
+  Resolves: https://redhat.atlassian.net/browse/RHEL-222024
+
 * Wed Jul 08 2026 Olivier Fourdan <ofourdan@redhat.com> - 2.0.6-5.1
 - CVE fix for: CVE-2026-56001, CVE-2026-56002, CVE-2026-56003
   Resolves: https://redhat.atlassian.net/browse/RHEL-191882
