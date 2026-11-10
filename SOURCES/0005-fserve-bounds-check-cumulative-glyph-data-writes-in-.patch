@@ -1,0 +1,176 @@
+From a0fea8e909f1c8dd6244bafb414b876e60edee63 Mon Sep 17 00:00:00 2001
+From: Peter Hutterer <peter.hutterer@who-t.net>
+Date: Mon, 13 Jul 2026 15:50:09 +1000
+Subject: [PATCH] fserve: bounds-check cumulative glyph data writes in
+ fs_read_glyphs
+
+fs_read_glyphs() copies each glyph's bitmap into a single allbits
+buffer allocated to rep->nbytes bytes. The per-glyph guard validates
+only that the source slice (position, length) lies within the pbitmaps
+source buffer. It does not check whether the running destination cursor
+has exceeded the allocation.
+
+A malicious font server can send overlapping source offsets (e.g. 1000
+glyphs each referencing {position:0, length:64} with nbytes=64). Each
+individual source range passes validation, but the cumulative writes
+total 64000 bytes into a 64-byte destination buffer.
+
+Interestingly there was an unconditional debug printf in place that
+sort-of warned about this but didn't prevent this. Let's remove that and
+instead use the actual check to bail out before we run OOB.
+
+A regression test is included that sends 100 glyphs each referencing
+the same 64-byte source slice into a 64-byte destination buffer, and
+verifies the library rejects the overflow.
+
+CVE-2026-44950
+
+Found-by: Zhixi "Jace" Sun, independent security researcher
+Assisted-by: Claude:claude-opus-4-6
+Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
+Part-of: <https://gitlab.freedesktop.org/xorg/lib/libxfont/-/merge_requests/36>
+---
+ src/fc/fserve.c                | 23 +++++++++------
+ test/test-fserve-read-glyphs.c | 52 +++++++++++++++++++++++++++++++---
+ 2 files changed, 62 insertions(+), 13 deletions(-)
+
+diff --git a/src/fc/fserve.c b/src/fc/fserve.c
+index 027f71d..0ed79c1 100644
+--- a/src/fc/fserve.c
++++ b/src/fc/fserve.c
+@@ -1923,10 +1923,7 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
+     fsOffset32		    local_off;
+     char		    *off_adr;
+     pointer		    pbitmaps;
+-    char		    *bits, *allbits;
+-#ifdef DEBUG
+-    char		    *origallbits;
+-#endif
++    char		    *bits, *allbits, *origallbits;
+     int			    i,
+ 			    err;
+     int			    nranges = 0;
+@@ -2027,8 +2024,8 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
+ 	goto bail;
+     }
+ 
+-#ifdef DEBUG
+     origallbits = allbits;
++#ifdef DEBUG
+     fprintf (stderr, "Reading %d glyphs in %d bytes for %s\n",
+ 	     (int) rep->num_chars, (int) rep->nbytes, fsd->name);
+ #endif
+@@ -2059,6 +2056,18 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
+ 		    (local_off.position < rep->nbytes) &&
+ 		    (local_off.length <= (rep->nbytes - local_off.position)))
+ 		{
++		    /* Check that the destination buffer has enough room
++		       for this glyph to prevent a heap overflow from
++		       overlapping source offsets. */
++		    if (local_off.length >
++			rep->nbytes - (allbits - origallbits))
++		    {
++			ErrorF("fserve: glyph data overflow: "
++			       "cumulative write exceeds nbytes (%u)\n",
++			       (unsigned) rep->nbytes);
++			err = AllocError;
++			goto bail;
++		    }
+ 		    bits = allbits;
+ 		    allbits += local_off.length;
+ 		    memcpy(bits, (char *)pbitmaps + local_off.position,
+@@ -2086,10 +2095,6 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
+ 	}
+ 	off_adr += SIZEOF(fsOffset32);
+     }
+-#ifdef DEBUG
+-    fprintf (stderr, "Used %d bytes instead of %d\n",
+-	     (int) (allbits - origallbits), (int) rep->nbytes);
+-#endif
+ 
+     if (blockrec->type == FS_OPEN_FONT)
+     {
+diff --git a/test/test-fserve-read-glyphs.c b/test/test-fserve-read-glyphs.c
+index 600a7ab..21c3410 100644
+--- a/test/test-fserve-read-glyphs.c
++++ b/test/test-fserve-read-glyphs.c
+@@ -285,7 +285,50 @@ test_num_chars_exceeds_encoding(void)
+ }
+ 
+ /*
+- * Test 2: legitimate reply should still be accepted
++ * Test 2: cumulative glyph data overflow
++ *
++ * Allocate allbits with nbytes=64, but send 100 glyphs each
++ * with offset {position:0, length:64}.  Each individual source
++ * range is valid, but the cumulative writes total 6400 bytes
++ * into a 64-byte buffer.
++ */
++static int
++test_cumulative_allbits_overflow(void)
++{
++    FSFpeRec conn;
++    struct test_font_state state;
++    char *reply_buf;
++    long reply_size;
++    int result;
++    int num_encoding = 100;  /* match num_chars so encoding[] is fine */
++    CARD32 num_chars = 100;
++    CARD32 nbytes = 64;      /* tiny destination buffer */
++
++    /* All offsets point to {position:0, length:64} -- each source
++     * range is valid but they overlap, causing 100*64=6400 bytes
++     * to be written to a 64-byte buffer */
++    reply_size = build_reply(&reply_buf, num_chars, nbytes, 0, 64);
++    setup_conn(&conn, reply_buf, reply_size);
++    setup_font_state(&state, &conn, num_encoding);
++
++    result = fs_read_glyphs(&state.fpe, &state.blockrec);
++
++    cleanup_font_state(&state);
++    cleanup_conn(&conn);
++    free(reply_buf);
++
++    if (result != Successful) {
++        printf("ok 2 - cumulative allbits overflow (100 * 64 into 64) rejected\n");
++        return 0;
++    } else {
++        printf("not ok 2 - cumulative allbits overflow (100 * 64 into 64) "
++               "should have been rejected\n");
++        return 1;
++    }
++}
++
++/*
++ * Test 3: legitimate reply should still be accepted
+  *
+  * num_chars == num_encoding, each glyph has unique non-overlapping
+  * offsets, and total data fits in nbytes.
+@@ -345,10 +388,10 @@ test_legitimate_reply(void)
+     free(reply_buf);
+ 
+     if (result == Successful) {
+-        printf("ok 2 - legitimate reply (4 glyphs, non-overlapping) accepted\n");
++        printf("ok 3 - legitimate reply (4 glyphs, non-overlapping) accepted\n");
+         return 0;
+     } else {
+-        printf("not ok 2 - legitimate reply (4 glyphs, non-overlapping) "
++        printf("not ok 3 - legitimate reply (4 glyphs, non-overlapping) "
+                "rejected with error %d\n", result);
+         return 1;
+     }
+@@ -359,9 +402,10 @@ main(int argc, char **argv)
+ {
+     int failures = 0;
+ 
+-    printf("1..2\n");
++    printf("1..3\n");
+ 
+     failures += test_num_chars_exceeds_encoding();
++    failures += test_cumulative_allbits_overflow();
+     failures += test_legitimate_reply();
+ 
+     return failures ? 1 : 0;
+-- 
+2.52.0
+

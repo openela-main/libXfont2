@@ -1,102 +1,124 @@
-From 3fa8bcc79c168c12430802ded944131ebe7de8c6 Mon Sep 17 00:00:00 2001
+From d8d7b11ac6756809da67f3da98b19911b6dd268a Mon Sep 17 00:00:00 2001
 From: Peter Hutterer <peter.hutterer@who-t.net>
-Date: Mon, 13 Jul 2026 15:50:09 +1000
-Subject: [PATCH] fserve: bounds-check cumulative glyph data writes in
+Date: Mon, 13 Jul 2026 15:48:06 +1000
+Subject: [PATCH] fserve: validate num_chars against encoding array size in
  fs_read_glyphs
 
-fs_read_glyphs() copies each glyph's bitmap into a single allbits
-buffer allocated to rep->nbytes bytes. The per-glyph guard validates
-only that the source slice (position, length) lies within the pbitmaps
-source buffer. It does not check whether the running destination cursor
-has exceeded the allocation.
+FS_QueryXExtents16 causes us to allocate the encoding[] array, later
+during the FS_QueryXBitmaps16 reply handling we fill in that array.
+There is no verification that the allocation is large enough, a
+malicious font server could send us a small numExtents and a
+large num_chars to force underallocation and OOB read/rwrite.
 
-A malicious font server can send overlapping source offsets (e.g. 1000
-glyphs each referencing {position:0, length:64} with nbytes=64). Each
-individual source range passes validation, but the cumulative writes
-total 64000 bytes into a 64-byte destination buffer.
+A regression test is included that constructs a crafted
+FS_QueryXBitmaps16 reply with num_chars > num_encoding and verifies
+the library rejects it.
 
-Interestingly there was an unconditional debug printf in place that
-sort-of warned about this but didn't prevent this. Let's remove that and
-instead use the actual check to bail out before we run OOB.
-
-A regression test is included that sends 100 glyphs each referencing
-the same 64-byte source slice into a 64-byte destination buffer, and
-verifies the library rejects the overflow.
-
-CVE-2026-44950
+CVE-2026-59679
 
 Found-by: Zhixi "Jace" Sun, independent security researcher
 Assisted-by: Claude:claude-opus-4-6
 Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
 Part-of: <https://gitlab.freedesktop.org/xorg/lib/libxfont/-/merge_requests/36>
 ---
- src/fc/fserve.c                |  23 +-
- test/test-fserve-read-glyphs.c | 412 +++++++++++++++++++++++++++++++++
- 2 files changed, 426 insertions(+), 9 deletions(-)
+ Makefile.am                    |  15 ++
+ src/fc/fserve.c                |  22 ++
+ src/fc/fservestr.h             |   1 +
+ test/test-fserve-read-glyphs.c | 368 +++++++++++++++++++++++++++++++++
+ 4 files changed, 406 insertions(+)
  create mode 100644 test/test-fserve-read-glyphs.c
 
+diff --git a/Makefile.am b/Makefile.am
+index 62ac7e2..34a6abf 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -168,6 +168,21 @@ noinst_PROGRAMS = lsfontdir
+ lsfontdir_SOURCES = test/utils/lsfontdir.c $(TEST_UTIL_SRCS)
+ lsfontdir_LDADD = libXfont2.la $(LTLIBOBJS)
+ 
++# Security regression tests
++TESTS =
++check_PROGRAMS =
++
++if XFONT_FC
++TESTS += test-fserve-read-glyphs
++check_PROGRAMS += test-fserve-read-glyphs
++
++# The test #includes fserve.c directly to access static functions so
++# we statically link against libXfont2.a.
++test_fserve_read_glyphs_SOURCES = test/test-fserve-read-glyphs.c $(TEST_UTIL_SRCS)
++test_fserve_read_glyphs_CFLAGS = $(AM_CFLAGS) -I$(top_srcdir)/include -I$(top_srcdir)/src/fc
++test_fserve_read_glyphs_LDFLAGS = -static
++test_fserve_read_glyphs_LDADD = libXfont2.la $(LTLIBOBJS)
++endif XFONT_FC
+ 
+ MAINTAINERCLEANFILES = ChangeLog INSTALL
+ 
 diff --git a/src/fc/fserve.c b/src/fc/fserve.c
-index c676234..97436cd 100644
+index c676234..027f71d 100644
 --- a/src/fc/fserve.c
 +++ b/src/fc/fserve.c
-@@ -1922,10 +1922,7 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
-     fsOffset32		    local_off;
-     char		    *off_adr;
-     pointer		    pbitmaps;
--    char		    *bits, *allbits;
--#ifdef DEBUG
--    char		    *origallbits;
--#endif
-+    char		    *bits, *allbits, *origallbits;
-     int			    i,
- 			    err;
-     int			    nranges = 0;
-@@ -2015,8 +2012,8 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
- 	goto bail;
+@@ -1097,6 +1097,7 @@ fs_read_extent_info(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
+ 	return AllocError;
      }
- 
--#ifdef DEBUG
-     origallbits = allbits;
-+#ifdef DEBUG
-     fprintf (stderr, "Reading %d glyphs in %d bytes for %s\n",
- 	     (int) rep->num_chars, (int) rep->nbytes, fsd->name);
- #endif
-@@ -2037,6 +2034,18 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
- 		    (local_off.position < rep->nbytes) &&
- 		    (local_off.length <= (rep->nbytes - local_off.position)))
- 		{
-+		    /* Check that the destination buffer has enough room
-+		       for this glyph to prevent a heap overflow from
-+		       overlapping source offsets. */
-+		    if (local_off.length >
-+			rep->nbytes - (allbits - origallbits))
-+		    {
-+			ErrorF("fserve: glyph data overflow: "
-+			       "cumulative write exceeds nbytes (%u)\n",
-+			       (unsigned) rep->nbytes);
-+			err = AllocError;
-+			goto bail;
-+		    }
- 		    bits = allbits;
- 		    allbits += local_off.length;
- 		    memcpy(bits, (char *)pbitmaps + local_off.position,
-@@ -2064,10 +2073,6 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
- 	}
- 	off_adr += SIZEOF(fsOffset32);
-     }
--#ifdef DEBUG
--    fprintf (stderr, "Used %d bytes instead of %d\n",
--	     (int) (allbits - origallbits), (int) rep->nbytes);
--#endif
- 
-     if (blockrec->type == FS_OPEN_FONT)
+     fsfont->encoding = pCI;
++    fsfont->num_encoding = numExtents;
+     if (haveInk)
+ 	fsfont->inkMetrics = pCI + numExtents;
+     else
+@@ -2003,6 +2004,17 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
      {
+ 	minchar = 0;
+ 	maxchar = rep->num_chars;
++
++	/* Reject replies where num_chars exceeds the encoding array
++	   size allocated in fs_read_extent_info() to prevent
++	   out-of-bounds access on encoding[]. */
++	if (rep->num_chars > (CARD32)fsdata->num_encoding)
++	{
++	    ErrorF("fserve: num_chars (%u) > num_encoding (%d)\n",
++		   (unsigned) rep->num_chars, fsdata->num_encoding);
++	    err = AllocError;
++	    goto bail;
++	}
+     }
+ 
+     off_adr = (char *)ppbits;
+@@ -2024,6 +2036,16 @@ fs_read_glyphs(FontPathElementPtr fpe, FSBlockDataPtr blockrec)
+     for (i = 0; i < rep->num_chars; i++)
+     {
+ 	memcpy(&local_off, off_adr, SIZEOF(fsOffset32));	/* align it */
++	/* Bounds-check minchar against the encoding array size to
++	   prevent out-of-bounds access from a malicious font server
++	   reply with more num_chars than num_extents. */
++	if (minchar >= (unsigned long)fsdata->num_encoding)
++	{
++	    ErrorF("fserve: glyph index %lu >= num_encoding (%d)\n",
++		   minchar, fsdata->num_encoding);
++	    err = AllocError;
++	    goto bail;
++	}
+ 	if (blockrec->type == FS_OPEN_FONT ||
+ 	    fsdata->encoding[minchar].bits == &_fs_glyph_requested)
+ 	{
+diff --git a/src/fc/fservestr.h b/src/fc/fservestr.h
+index 29ae46e..da95e41 100644
+--- a/src/fc/fservestr.h
++++ b/src/fc/fservestr.h
+@@ -43,6 +43,7 @@ typedef struct _fs_glyph {
+ typedef struct _fs_font {
+     CharInfoPtr pDefault;
+     CharInfoPtr encoding;
++    int		num_encoding;
+     CharInfoPtr inkMetrics;
+     FSGlyphPtr	glyphs;
+ }           FSFontRec, *FSFontPtr;
 diff --git a/test/test-fserve-read-glyphs.c b/test/test-fserve-read-glyphs.c
 new file mode 100644
-index 0000000..21c3410
+index 0000000..600a7ab
 --- /dev/null
 +++ b/test/test-fserve-read-glyphs.c
-@@ -0,0 +1,412 @@
+@@ -0,0 +1,368 @@
 +/*
 + * Security regression tests for fs_read_glyphs() in src/fc/fserve.c.
 + *
@@ -384,50 +406,7 @@ index 0000000..21c3410
 +}
 +
 +/*
-+ * Test 2: cumulative glyph data overflow
-+ *
-+ * Allocate allbits with nbytes=64, but send 100 glyphs each
-+ * with offset {position:0, length:64}.  Each individual source
-+ * range is valid, but the cumulative writes total 6400 bytes
-+ * into a 64-byte buffer.
-+ */
-+static int
-+test_cumulative_allbits_overflow(void)
-+{
-+    FSFpeRec conn;
-+    struct test_font_state state;
-+    char *reply_buf;
-+    long reply_size;
-+    int result;
-+    int num_encoding = 100;  /* match num_chars so encoding[] is fine */
-+    CARD32 num_chars = 100;
-+    CARD32 nbytes = 64;      /* tiny destination buffer */
-+
-+    /* All offsets point to {position:0, length:64} -- each source
-+     * range is valid but they overlap, causing 100*64=6400 bytes
-+     * to be written to a 64-byte buffer */
-+    reply_size = build_reply(&reply_buf, num_chars, nbytes, 0, 64);
-+    setup_conn(&conn, reply_buf, reply_size);
-+    setup_font_state(&state, &conn, num_encoding);
-+
-+    result = fs_read_glyphs(&state.fpe, &state.blockrec);
-+
-+    cleanup_font_state(&state);
-+    cleanup_conn(&conn);
-+    free(reply_buf);
-+
-+    if (result != Successful) {
-+        printf("ok 2 - cumulative allbits overflow (100 * 64 into 64) rejected\n");
-+        return 0;
-+    } else {
-+        printf("not ok 2 - cumulative allbits overflow (100 * 64 into 64) "
-+               "should have been rejected\n");
-+        return 1;
-+    }
-+}
-+
-+/*
-+ * Test 3: legitimate reply should still be accepted
++ * Test 2: legitimate reply should still be accepted
 + *
 + * num_chars == num_encoding, each glyph has unique non-overlapping
 + * offsets, and total data fits in nbytes.
@@ -487,10 +466,10 @@ index 0000000..21c3410
 +    free(reply_buf);
 +
 +    if (result == Successful) {
-+        printf("ok 3 - legitimate reply (4 glyphs, non-overlapping) accepted\n");
++        printf("ok 2 - legitimate reply (4 glyphs, non-overlapping) accepted\n");
 +        return 0;
 +    } else {
-+        printf("not ok 3 - legitimate reply (4 glyphs, non-overlapping) "
++        printf("not ok 2 - legitimate reply (4 glyphs, non-overlapping) "
 +               "rejected with error %d\n", result);
 +        return 1;
 +    }
@@ -501,10 +480,9 @@ index 0000000..21c3410
 +{
 +    int failures = 0;
 +
-+    printf("1..3\n");
++    printf("1..2\n");
 +
 +    failures += test_num_chars_exceeds_encoding();
-+    failures += test_cumulative_allbits_overflow();
 +    failures += test_legitimate_reply();
 +
 +    return failures ? 1 : 0;
