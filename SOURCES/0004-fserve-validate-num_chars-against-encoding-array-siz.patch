@@ -1,4 +1,4 @@
-From 7e075dc1678e53a81ce95ba3036abeaeea1539e3 Mon Sep 17 00:00:00 2001
+From a413d134afc3c63ccdbac19c3a2317835b2aef54 Mon Sep 17 00:00:00 2001
 From: Peter Hutterer <peter.hutterer@who-t.net>
 Date: Mon, 13 Jul 2026 15:48:06 +1000
 Subject: [PATCH] fserve: validate num_chars against encoding array size in
@@ -21,10 +21,38 @@ Assisted-by: Claude:claude-opus-4-6
 Signed-off-by: Peter Hutterer <peter.hutterer@who-t.net>
 Part-of: <https://gitlab.freedesktop.org/xorg/lib/libxfont/-/merge_requests/36>
 ---
+ Makefile.am        | 16 ++++++++++++++++
  src/fc/fserve.c    | 22 ++++++++++++++++++++++
  src/fc/fservestr.h |  1 +
- 2 files changed, 23 insertions(+)
+ 3 files changed, 39 insertions(+)
 
+diff --git a/Makefile.am b/Makefile.am
+index c1a3db2..ef9bc40 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -157,6 +157,22 @@ endif
+ 
+ EXTRA_DIST = src/builtins/buildfont
+ 
++# Security regression tests
++TESTS =
++check_PROGRAMS =
++
++if XFONT_FC
++TESTS += test-fserve-read-glyphs
++check_PROGRAMS += test-fserve-read-glyphs
++
++# The test #includes fserve.c directly to access static functions so
++# we statically link against libXfont2.a.
++test_fserve_read_glyphs_SOURCES = test/test-fserve-read-glyphs.c
++test_fserve_read_glyphs_CFLAGS = $(AM_CFLAGS) -I$(top_srcdir)/include -I$(top_srcdir)/src/fc
++test_fserve_read_glyphs_LDFLAGS = -static
++test_fserve_read_glyphs_LDADD = libXfont2.la $(LTLIBOBJS)
++endif XFONT_FC
++
+ MAINTAINERCLEANFILES = ChangeLog INSTALL
+ 
+ .PHONY: ChangeLog INSTALL
 diff --git a/src/fc/fserve.c b/src/fc/fserve.c
 index 708fc35..4141c3c 100644
 --- a/src/fc/fserve.c
